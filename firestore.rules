@@ -1,0 +1,288 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global default-deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Primitive Helpers ---
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isAdmin() {
+      return isVerifiedUser() && (
+        request.auth.token.email == 'spirosvelianitis@gmail.com' ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    function isValidDateStr(d) {
+      return d is string && d.size() == 10 && d.matches('^20[2-9][0-9]-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$');
+    }
+
+    function isValidEmail(e) {
+      return e is string && e.size() >= 5 && e.size() <= 120 && e.matches('^[^@ ]+@[^@ ]+\\.[^@ ]+$');
+    }
+
+    function isValidSlotKey(k) {
+      return k in ['morning', 'midday', 'afternoon'];
+    }
+
+    // --- Validation Blueprints ---
+    function isValidProfile(data) {
+      return data.keys().hasAll([
+          'businessName', 'craftsmanName', 'headline', 'serviceArea',
+          'yearsExperience', 'completedJobs', 'hourlyRate', 'minimumCallout',
+          'bioSummary', 'phoneDisplay', 'emailDisplay', 'licenseInfo', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'businessName', 'craftsmanName', 'headline', 'serviceArea',
+          'yearsExperience', 'completedJobs', 'hourlyRate', 'minimumCallout',
+          'bioSummary', 'phoneDisplay', 'emailDisplay', 'licenseInfo', 'updatedAt'
+        ])
+        && data.businessName is string && data.businessName.size() >= 2 && data.businessName.size() <= 100
+        && data.craftsmanName is string && data.craftsmanName.size() >= 2 && data.craftsmanName.size() <= 80
+        && data.headline is string && data.headline.size() >= 5 && data.headline.size() <= 140
+        && data.serviceArea is string && data.serviceArea.size() >= 2 && data.serviceArea.size() <= 120
+        && data.yearsExperience is int && data.yearsExperience >= 0 && data.yearsExperience <= 80
+        && data.completedJobs is int && data.completedJobs >= 0 && data.completedJobs <= 100000
+        && data.hourlyRate is number && data.hourlyRate >= 20 && data.hourlyRate <= 500
+        && data.minimumCallout is number && data.minimumCallout >= 20 && data.minimumCallout <= 1000
+        && data.bioSummary is string && data.bioSummary.size() >= 10 && data.bioSummary.size() <= 1200
+        && data.phoneDisplay is string && data.phoneDisplay.size() >= 7 && data.phoneDisplay.size() <= 30
+        && isValidEmail(data.emailDisplay)
+        && data.licenseInfo is string && data.licenseInfo.size() >= 3 && data.licenseInfo.size() <= 120
+        && data.updatedAt == request.time;
+    }
+
+    function isValidProject(data) {
+      return data.keys().hasAll([
+          'title', 'category', 'neighborhood', 'duration', 'materials',
+          'summary', 'imageUrl', 'featured', 'sortOrder', 'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'title', 'category', 'neighborhood', 'duration', 'materials',
+          'summary', 'imageUrl', 'featured', 'sortOrder', 'createdAt'
+        ])
+        && data.title is string && data.title.size() >= 2 && data.title.size() <= 100
+        && data.category in ['Carpentry', 'Kitchen & Bath', 'Exterior', 'Electrical & Lighting']
+        && data.neighborhood is string && data.neighborhood.size() >= 2 && data.neighborhood.size() <= 80
+        && data.duration is string && data.duration.size() >= 2 && data.duration.size() <= 40
+        && data.materials is string && data.materials.size() >= 2 && data.materials.size() <= 140
+        && data.summary is string && data.summary.size() >= 10 && data.summary.size() <= 600
+        && data.imageUrl is string && data.imageUrl.size() >= 5 && data.imageUrl.size() <= 500
+        && data.featured is bool
+        && data.sortOrder is int && data.sortOrder >= 0 && data.sortOrder <= 10000
+        && data.createdAt is timestamp;
+    }
+
+    function isValidScheduleSlot(data, slotId) {
+      return data.keys().hasAll(['date', 'slotKey', 'status', 'updatedAt'])
+        && data.keys().hasOnly(['date', 'slotKey', 'status', 'appointmentId', 'note', 'updatedAt'])
+        && isValidDateStr(data.date)
+        && isValidSlotKey(data.slotKey)
+        && slotId == (data.date + '_' + data.slotKey)
+        && data.status in ['booked', 'blocked']
+        && (!('appointmentId' in data) || isValidId(data.appointmentId))
+        && (!('note' in data) || (data.note is string && data.note.size() <= 120))
+        && data.updatedAt == request.time;
+    }
+
+    function isValidAppointment(data) {
+      return data.keys().hasAll([
+          'userId', 'clientName', 'clientEmail', 'clientPhone', 'serviceAddress',
+          'serviceCategory', 'date', 'slotKey', 'slotId', 'description',
+          'status', 'adminNotes', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'userId', 'clientName', 'clientEmail', 'clientPhone', 'serviceAddress',
+          'serviceCategory', 'date', 'slotKey', 'slotId', 'description',
+          'status', 'adminNotes', 'createdAt', 'updatedAt'
+        ])
+        && data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128
+        && data.clientName is string && data.clientName.size() >= 2 && data.clientName.size() <= 80
+        && isValidEmail(data.clientEmail)
+        && data.clientPhone is string && data.clientPhone.size() >= 7 && data.clientPhone.size() <= 25
+        && data.serviceAddress is string && data.serviceAddress.size() >= 5 && data.serviceAddress.size() <= 200
+        && data.serviceCategory in [
+          'Carpentry & Trim', 'Kitchen & Bath', 'Drywall & Paint',
+          'Doors & Hardware', 'Decks & Exterior', 'Electrical & Fixtures', 'General Maintenance'
+        ]
+        && isValidDateStr(data.date)
+        && isValidSlotKey(data.slotKey)
+        && data.slotId == (data.date + '_' + data.slotKey)
+        && data.description is string && data.description.size() >= 5 && data.description.size() <= 1000
+        && data.status in ['pending', 'confirmed', 'completed', 'cancelled']
+        && data.adminNotes is string && data.adminNotes.size() <= 500
+        && data.createdAt is timestamp
+        && data.updatedAt == request.time;
+    }
+
+    function isValidEstimate(data) {
+      return data.keys().hasAll([
+          'userId', 'clientName', 'clientEmail', 'clientPhone', 'neighborhood',
+          'jobType', 'scopeUnits', 'complexity', 'materialsBy', 'urgency',
+          'estimatedMin', 'estimatedMax', 'estimatedHours', 'projectNotes',
+          'status', 'formalQuoteAmount', 'adminNotes', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'userId', 'clientName', 'clientEmail', 'clientPhone', 'neighborhood',
+          'jobType', 'scopeUnits', 'complexity', 'materialsBy', 'urgency',
+          'estimatedMin', 'estimatedMax', 'estimatedHours', 'projectNotes',
+          'status', 'formalQuoteAmount', 'adminNotes', 'createdAt', 'updatedAt'
+        ])
+        && data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128
+        && data.clientName is string && data.clientName.size() >= 2 && data.clientName.size() <= 80
+        && isValidEmail(data.clientEmail)
+        && data.clientPhone is string && data.clientPhone.size() >= 7 && data.clientPhone.size() <= 25
+        && data.neighborhood is string && data.neighborhood.size() >= 2 && data.neighborhood.size() <= 100
+        && data.jobType is string && data.jobType.size() >= 2 && data.jobType.size() <= 80
+        && data.scopeUnits is int && data.scopeUnits >= 1 && data.scopeUnits <= 100
+        && data.complexity in ['standard', 'moderate', 'complex']
+        && data.materialsBy in ['client', 'handyman']
+        && data.urgency in ['flexible', 'priority']
+        && data.estimatedMin is number && data.estimatedMin >= 0 && data.estimatedMin <= 50000
+        && data.estimatedMax is number && data.estimatedMax >= data.estimatedMin && data.estimatedMax <= 50000
+        && data.estimatedHours is string && data.estimatedHours.size() >= 1 && data.estimatedHours.size() <= 30
+        && data.projectNotes is string && data.projectNotes.size() >= 5 && data.projectNotes.size() <= 1200
+        && data.status in ['requested', 'quoted', 'accepted', 'archived']
+        && data.formalQuoteAmount is number && data.formalQuoteAmount >= 0 && data.formalQuoteAmount <= 100000
+        && data.adminNotes is string && data.adminNotes.size() <= 600
+        && data.createdAt is timestamp
+        && data.updatedAt == request.time;
+    }
+
+    // --- Collection Rules ---
+
+    // 1. Public Profile (Single doc 'main')
+    match /profile/{profileId} {
+      allow get: if isValidId(profileId);
+      allow create, update: if isValidId(profileId) && isAdmin() && isValidProfile(incoming());
+      allow delete: if false;
+    }
+
+    // 2. Public Portfolio Gallery
+    match /projects/{projectId} {
+      allow get: if isValidId(projectId);
+      allow list: if true;
+      allow create: if isValidId(projectId) && isAdmin() && isValidProject(incoming()) && incoming().createdAt == request.time;
+      allow update: if isValidId(projectId) && isAdmin() && isValidProject(incoming())
+        && incoming().createdAt == existing().createdAt;
+      allow delete: if isValidId(projectId) && isAdmin();
+    }
+
+    // 3. Public Non-PII Schedule Availability Slots
+    match /schedule_slots/{slotId} {
+      allow get: if isValidId(slotId);
+      allow list: if true;
+      allow create: if isValidId(slotId)
+        && isValidScheduleSlot(incoming(), slotId)
+        && (
+          isAdmin() ||
+          (
+            incoming().status == 'booked' &&
+            ('appointmentId' in incoming()) &&
+            existsAfter(/databases/$(database)/documents/appointments/$(incoming().appointmentId))
+          )
+        );
+      allow update: if isValidId(slotId) && isAdmin() && isValidScheduleSlot(incoming(), slotId);
+      allow delete: if isValidId(slotId) && isAdmin();
+    }
+
+    // 4. Appointments (PII Protected)
+    match /appointments/{appointmentId} {
+      allow get: if isValidId(appointmentId) && (
+        isAdmin() ||
+        (isSignedIn() && existing().userId == request.auth.uid)
+      );
+      allow list: if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
+      allow create: if isValidId(appointmentId)
+        && isValidAppointment(incoming())
+        && incoming().createdAt == request.time
+        && incoming().status == 'pending'
+        && incoming().adminNotes == ''
+        && (
+          (isSignedIn() && incoming().userId == request.auth.uid) ||
+          (!isSignedIn() && incoming().userId == 'guest')
+        )
+        && existsAfter(/databases/$(database)/documents/schedule_slots/$(incoming().slotId));
+      allow update: if isValidId(appointmentId) && isValidAppointment(incoming())
+        && incoming().createdAt == existing().createdAt
+        && incoming().userId == existing().userId
+        && (
+          (isAdmin() && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'adminNotes', 'updatedAt'])) ||
+          (
+            isSignedIn() &&
+            existing().userId == request.auth.uid &&
+            existing().status in ['pending', 'confirmed'] &&
+            incoming().status == 'cancelled' &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])
+          )
+        );
+      allow delete: if isValidId(appointmentId) && isAdmin();
+    }
+
+    // 5. Estimates (PII Protected)
+    match /estimates/{estimateId} {
+      allow get: if isValidId(estimateId) && (
+        isAdmin() ||
+        (isSignedIn() && existing().userId == request.auth.uid)
+      );
+      allow list: if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
+      allow create: if isValidId(estimateId)
+        && isValidEstimate(incoming())
+        && incoming().createdAt == request.time
+        && incoming().status == 'requested'
+        && incoming().formalQuoteAmount == 0
+        && incoming().adminNotes == ''
+        && (
+          (isSignedIn() && incoming().userId == request.auth.uid) ||
+          (!isSignedIn() && incoming().userId == 'guest')
+        );
+      allow update: if isValidId(estimateId) && isValidEstimate(incoming())
+        && incoming().createdAt == existing().createdAt
+        && incoming().userId == existing().userId
+        && (
+          (isAdmin() && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'formalQuoteAmount', 'adminNotes', 'updatedAt'])) ||
+          (
+            isSignedIn() &&
+            existing().userId == request.auth.uid &&
+            existing().status == 'quoted' &&
+            incoming().status == 'accepted' &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])
+          )
+        );
+      allow delete: if isValidId(estimateId) && isAdmin();
+    }
+
+    // 6. Admins Lookup
+    match /admins/{adminId} {
+      allow get: if isValidId(adminId) && (isAdmin() || (isSignedIn() && request.auth.uid == adminId));
+      allow list: if isAdmin();
+      allow create, update, delete: if false;
+    }
+
+    // 7. Connection Test Doc (Read-only diagnostic)
+    match /test/connection {
+      allow get: if true;
+    }
+  }
+}

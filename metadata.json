@@ -1,0 +1,6 @@
+{
+  "name": "Vance Home Craft",
+  "description": "Handyman & finish carpentry studio featuring live schedules, craftsman bio, project photography gallery, appointment booking, and interactive cost estimates.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
